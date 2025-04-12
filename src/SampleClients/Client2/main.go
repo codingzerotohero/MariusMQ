@@ -6,7 +6,7 @@ import (
 	"net"
 )
 
-const serverPassword = "pass@word"
+const serverPassword = "pass"
 const messageDelimiter = '\n'
 
 func main() {
@@ -23,6 +23,12 @@ func main() {
 	if err != nil {
 		fmt.Println("Error sending data: ", err)
 		return
+	}
+
+	subData := []byte("SUBSCRIBE" + ";" + "my-message-queue" + string(messageDelimiter))
+	_, err = conn.Write(subData)
+	if err != nil {
+		fmt.Println("Error sending data: ", err)
 	}
 
 	buffer := make([]byte, 1024)

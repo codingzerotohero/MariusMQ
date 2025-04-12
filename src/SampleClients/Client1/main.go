@@ -6,7 +6,7 @@ import (
 	"net"
 )
 
-const serverPassword = "pass@word"
+const serverPassword = "pass"
 const messageDelimiter = '\n'
 
 func main() {
@@ -25,6 +25,18 @@ func main() {
 		return
 	}
 
+	createData := []byte("CREATE" + ";" + "my-message-queue" + string(messageDelimiter))
+	_, err = conn.Write(createData)
+	if err != nil {
+		fmt.Println("Error sending data: ", err)
+	}
+
+	publishData := []byte("PUBLISH" + ";" + "my-message-queue" + ";" + "this is my message" + string(messageDelimiter))
+	_, err = conn.Write(publishData)
+	if err != nil {
+		fmt.Println("Error sending data: ", err)
+	}
+
 	buffer := make([]byte, 1024)
 
 	for {
@@ -35,4 +47,12 @@ func main() {
 		}
 		fmt.Printf("Received: %s\n", buffer[:n])
 	}
+}
+
+func connect() {
+
+}
+
+func create() {
+
 }

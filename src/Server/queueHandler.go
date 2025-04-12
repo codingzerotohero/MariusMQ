@@ -5,17 +5,21 @@ import (
 )
 
 type QueueHandler struct {
+	MessageQueues map[string]MessageQueue
 }
 
-func (q *QueueHandler) GetQueueByName() {
+func (q *QueueHandler) CreateQueue(name string) {
+	if name != "" {
+		queue := MessageQueue{Id: uuid.New(), QueueName: name, Clients: []Client{}}
+		q.MessageQueues[name] = queue
+	}
+}
 
+func (q *QueueHandler) GetQueueByName(name string) MessageQueue {
+	return q.MessageQueues[name]
 }
 
 func (q *QueueHandler) GetQueueById() {
-
-}
-
-func (q *QueueHandler) GetQueues() {
 
 }
 
@@ -27,11 +31,14 @@ func (q *QueueHandler) DeleteQueues() {
 
 }
 
-func (q *QueueHandler) CreateQueue() {
-
+type MessageQueue struct {
+	Id        uuid.UUID
+	QueueName string
+	Clients   []Client
 }
 
-type MessageQueue struct {
-	QueueName string
-	Id        uuid.UUID
+type Client struct {
+	Id         uuid.UUID
+	IPAddress  string
+	ClientType string
 }

@@ -6,6 +6,8 @@ import (
 )
 
 const defaultPassword = "pass"
+const defaultServerPort = "8080"
+const defaultServerAddress = "localhost"
 
 func main() {
 	log.Println("** WELCOME TO MariusMQ Server - the newest, fastest and coolest message broker on the planet! **")
@@ -13,14 +15,32 @@ func main() {
 
 	var configuration Configuration
 
-	value, envExists := os.LookupEnv("MARIUSMQ_PASSWORD")
+	password, passEnvSet := os.LookupEnv("MARIUSMQ_PASSWORD")
+	port, portEnvSet := os.LookupEnv("MARIUSMQ_SERVERPORT")
+	address, addrEnvSet := os.LookupEnv("MARIUSMQ_SERVERADDRESS")
 
-	if envExists && value != "" {
-		configuration.MARIUSMQ_PASSWORD = value
+	if passEnvSet && password != "" {
+		configuration.MARIUSMQ_PASSWORD = password
 		log.Println("Server has been set to use an overriden password through environment variable")
 	} else {
 		log.Println("Server has been set to use the default password")
 		configuration.MARIUSMQ_PASSWORD = defaultPassword
+	}
+
+	if portEnvSet && port != "" {
+		configuration.MARIUSMQ_SERVERPORT = port
+		log.Println("Server has been set to use an overriden port through environment variable")
+	} else {
+		log.Println("Server has been set to use the default port")
+		configuration.MARIUSMQ_SERVERPORT = defaultServerPort
+	}
+
+	if addrEnvSet && address != "" {
+		configuration.MARIUSMQ_SERVERADDRESS = address
+		log.Println("Server has been set to use an overriden address through environment variable")
+	} else {
+		log.Println("Server has been set to use the default address")
+		configuration.MARIUSMQ_SERVERADDRESS = defaultServerAddress
 	}
 
 	startServer(configuration)

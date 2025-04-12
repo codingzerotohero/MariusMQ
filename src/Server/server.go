@@ -22,7 +22,7 @@ func startServer(configuration Configuration) {
 
 	fmt.Println("Server is listening on port: " + configuration.MARIUSMQ_SERVERPORT)
 
-	clientHandler := ClientHandler{Id: uuid.New(), ServerPassword: configuration.MARIUSMQ_PASSWORD}
+	clientHandler := ClientHandler{Id: uuid.New(), ServerPassword: configuration.MARIUSMQ_PASSWORD, QueueHandler: QueueHandler{MessageQueues: map[string]MessageQueue{}}}
 
 	for {
 		conn, err := listener.Accept()
