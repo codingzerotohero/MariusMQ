@@ -18,14 +18,14 @@ func main() {
 
 	defer conn.Close()
 
-	data := []byte("CONNECT" + ";" + serverPassword + string(messageDelimiter))
+	data := []byte("0" + ";" + "CONNECT" + ";" + serverPassword + string(messageDelimiter))
 	_, err = conn.Write(data)
 	if err != nil {
 		fmt.Println("Error sending data: ", err)
 		return
 	}
 
-	createData := []byte("CREATE" + ";" + "my-message-queue" + string(messageDelimiter))
+	/*createData := []byte("CREATE" + ";" + "my-message-queue" + string(messageDelimiter))
 	_, err = conn.Write(createData)
 	if err != nil {
 		fmt.Println("Error sending data: ", err)
@@ -35,7 +35,7 @@ func main() {
 	_, err = conn.Write(publishData)
 	if err != nil {
 		fmt.Println("Error sending data: ", err)
-	}
+	}*/
 
 	buffer := make([]byte, 1024)
 

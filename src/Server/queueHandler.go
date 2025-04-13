@@ -1,5 +1,6 @@
 package main
 
+/*
 import (
 	"github.com/google/uuid"
 )
@@ -36,9 +37,4 @@ type MessageQueue struct {
 	QueueName string
 	Clients   []Client
 }
-
-type Client struct {
-	Id         uuid.UUID
-	IPAddress  string
-	ClientType string
-}
+*/

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -12,10 +13,10 @@ import (
 const messageDelimiter = '\n'
 
 type ClientHandler struct {
-	Id             uuid.UUID
-	ServerPassword string
-	Connections    []net.Conn
-	QueueHandler   QueueHandler
+	Id          uuid.UUID
+	Clients     []*Client
+	AuthHandler AuthHandler
+	Dispatcher  Dispatcher
 }
 
 func (c *ClientHandler) handleClient(conn net.Conn) {
@@ -23,60 +24,27 @@ func (c *ClientHandler) handleClient(conn net.Conn) {
 
 	log.Println("Client connected: ", conn.RemoteAddr().String())
 
+	client := &Client{
+		Id:         uuid.New(),
+		IPAddress:  conn.RemoteAddr().String(),
+		Channels:   map[int]*Channel{},
+		Connection: conn,
+	}
+
 	for {
-		n, err := reader.ReadString(messageDelimiter)
+		message, err := reader.ReadString(messageDelimiter)
 		if err != nil {
 			log.Println("Error reading message", err)
 			return
 		}
-		n = strings.TrimSpace(n)
-		log.Printf("Client message: %s\n", n)
 
-		var messageArr = strings.Split(n, ";")
-
-		//if len(messageArr) > 2 {
-		//	log.Println("Invalid message format!")
-		//	continue
-		//}
-
-		cmd := Command(messageArr[0])
-		value := messageArr[1]
-
-		log.Println(cmd)
-
-		switch cmd {
-		case CONNECT:
-			log.Println("Handle connection request")
-			if value == c.ServerPassword {
-				log.Println("Client connection request accepted - " + conn.RemoteAddr().String())
-				data := []byte("CONNECT REQUEST ACCEPTED")
-				_, err = conn.Write(data)
-				if err != nil {
-					log.Println("Error sending data: ", err)
-					return
-				}
-
-			} else {
-				log.Println("Refused connection request from client: " + conn.RemoteAddr().String() + " due to bad password")
-
-				data := []byte("CONNECT REQUEST DENIED: INCORRECT PASSWORD.")
-				_, err = conn.Write(data)
-				if err != nil {
-					log.Println("Error sending data: ", err)
-				}
-				conn.Close()
-				return
-			}
-		case CREATE:
-			log.Println("Handle create queue request")
-			c.QueueHandler.CreateQueue(value)
-		case PUBLISH:
-			log.Println("Handle publish request")
-		case SUBSCRIBE:
-			log.Println("Handle subscribe request")
-		default:
-			log.Println("Something else" + cmd)
+		frame, err := ParseMessage(message)
+		if err != nil {
+			log.Println("ERROR PARSE: ", err)
+			return
 		}
+		c.Dispatcher.Dispatch(*frame)
+		//c.Route(n, client)
 	}
 }
 
@@ -84,8 +52,68 @@ func closeConnection(conn net.Conn) {
 	conn.Close()
 }
 
-func (c *ClientHandler) closeAllConnections() {
-	for _, conn := range c.Connections {
-		conn.Close()
+func (r *ClientHandler) Route(message string, Client *Client) {
+
+	//cmd := Command(frame.Command)
+
+	/*
+		switch cmd {
+		case CONNECT:
+			log.Println("Routing to Auth")
+		case CREATE:
+			//log.Println("Handle create queue request")
+			//go c.QueueHandler.CreateQueue(value)
+			//data := []byte("CREATED")
+			//_, err = conn.Write(data)
+			//if err != nil {
+			//	log.Println("Error sending data: ", err)
+			//}
+		case PUBLISH:
+			log.Println("Handle publish request")
+		case SUBSCRIBE:
+			log.Println("Handle subscribe request")
+		default:
+			log.Println("Something else" + cmd)
+		}*/
+}
+
+func ParseMessage(message string) (*Frame, error) {
+	message = strings.TrimSpace(message)
+
+	var messageArr = strings.Split(message, ";")
+
+	channelID, err := strconv.Atoi(messageArr[0])
+	if err != nil {
+		return nil, err
 	}
+
+	payload := messageArr[2]
+
+	return &Frame{
+		ChannelID: channelID,
+		Command:   messageArr[1],
+		Payload:   payload,
+	}, nil
+}
+
+type Client struct {
+	Id            uuid.UUID
+	IPAddress     string
+	Channels      map[int]*Channel
+	Connection    net.Conn
+	Authenticated bool
+}
+
+type FrameHandler interface {
+	Handle(frame Frame) bool
+}
+
+type Channel struct {
+	Id int
+}
+
+type Frame struct {
+	ChannelID int
+	Command   string
+	Payload   string
 }
