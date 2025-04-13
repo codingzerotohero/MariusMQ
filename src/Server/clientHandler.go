@@ -43,8 +43,21 @@ func (c *ClientHandler) handleClient(conn net.Conn) {
 			log.Println("ERROR PARSE: ", err)
 			return
 		}
-		c.Dispatcher.Dispatch(*frame)
-		//c.Route(n, client)
+
+		if !c.Dispatcher.Dispatch(*frame, client) {
+			switch frame.ChannelID {
+			case 0:
+				if !client.Authenticated {
+					data := []byte("Authentication failed - bad password")
+					_, err = conn.Write(data)
+					if err != nil {
+						log.Println("Error sending data: ", err)
+					}
+					client.Connection.Close()
+					return
+				}
+			}
+		}
 	}
 }
 
@@ -109,7 +122,8 @@ type FrameHandler interface {
 }
 
 type Channel struct {
-	Id int
+	Id            int
+	MessageQueues []string
 }
 
 type Frame struct {

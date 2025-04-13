@@ -6,7 +6,7 @@ import (
 	"net"
 )
 
-const serverPassword = "pass"
+const serverPassword = "abba"
 const messageDelimiter = '\n'
 
 func main() {

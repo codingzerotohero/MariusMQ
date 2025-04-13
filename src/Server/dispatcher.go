@@ -1,6 +1,8 @@
 package main
 
-import "log"
+import (
+	"log"
+)
 
 type Dispatcher struct {
 	Handlers map[int]FrameHandler
@@ -16,12 +18,20 @@ func (d *Dispatcher) Register(channelID int, handler FrameHandler) {
 	d.Handlers[channelID] = handler
 }
 
-func (d *Dispatcher) Dispatch(frame Frame) bool {
+func (d *Dispatcher) Dispatch(frame Frame, client *Client) bool {
 	handler, ok := d.Handlers[frame.ChannelID]
 	if !ok {
 		log.Printf("⚠️ No handler registered for channel %d\n", frame.ChannelID)
 		return false
 	}
 
-	return handler.Handle(frame)
+	result := handler.Handle(frame)
+
+	if !result {
+		switch handler.(type) {
+		case *AuthHandler:
+			client.Authenticated = false
+		}
+	}
+	return result
 }

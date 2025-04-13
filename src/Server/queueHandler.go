@@ -1,12 +1,15 @@
 package main
 
-/*
 import (
 	"github.com/google/uuid"
 )
 
 type QueueHandler struct {
 	MessageQueues map[string]MessageQueue
+}
+
+func (q *QueueHandler) Handle() {
+
 }
 
 func (q *QueueHandler) CreateQueue(name string) {
@@ -37,4 +40,3 @@ type MessageQueue struct {
 	QueueName string
 	Clients   []Client
 }
-*/
