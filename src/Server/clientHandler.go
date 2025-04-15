@@ -14,9 +14,9 @@ const messageDelimiter = '\n'
 
 type ClientHandler struct {
 	Id          uuid.UUID
-	Clients     []*Client
-	AuthHandler AuthHandler
-	Dispatcher  Dispatcher
+	Clients     map[string]*Client
+	AuthHandler *AuthHandler
+	Broker      *Broker
 }
 
 func (c *ClientHandler) handleClient(conn net.Conn) {
@@ -38,34 +38,55 @@ func (c *ClientHandler) handleClient(conn net.Conn) {
 			return
 		}
 
-		frame, err := ParseMessage(message)
+		frame, err := ParseMessage(message, client.IPAddress)
 		if err != nil {
 			log.Println("ERROR PARSE: ", err)
 			return
 		}
 
-		if !c.Dispatcher.Dispatch(*frame, client) {
-			switch frame.ChannelID {
-			case 0:
-				if !client.Authenticated {
-					data := []byte("Authentication failed - bad password")
-					_, err = conn.Write(data)
-					if err != nil {
-						log.Println("Error sending data: ", err)
-					}
-					client.Connection.Close()
-					return
-				}
+		switch frame.ChannelID {
+		case 0:
+			go c.AuthHandler.Handle(*frame, client)
+		default:
+			if !client.Authenticated {
+				log.Println("❌ Auth failed - client has not been authenticated.")
+				data := []byte("❌ Not authenticated! Rejected.")
+				_, err = client.Connection.Write(data)
+				client.Connection.Close()
+				return
+			} else {
+				go c.Broker.Handle(*frame)
 			}
 		}
+
+		/*
+			if !c.Dispatcher.Dispatch(*frame, client) {
+				switch frame.ChannelID {
+				case 0:
+					if !client.Authenticated {
+						data := []byte("Authentication failed - bad password")
+						_, err = conn.Write(data)
+						if err != nil {
+							log.Println("Error sending data: ", err)
+						}
+						client.Connection.Close()
+						return
+					}
+				}
+			}*/
 	}
+}
+
+func (c *ClientHandler) SendMessageToConsumer(client Client, channel Channel, message string) {
+	data := []byte(strconv.Itoa(channel.Id) + ";" + message)
+	client.Connection.Write(data)
 }
 
 func closeConnection(conn net.Conn) {
 	conn.Close()
 }
 
-func (r *ClientHandler) Route(message string, Client *Client) {
+func (c *ClientHandler) Route(message string, Client *Client) {
 
 	//cmd := Command(frame.Command)
 
@@ -90,7 +111,7 @@ func (r *ClientHandler) Route(message string, Client *Client) {
 		}*/
 }
 
-func ParseMessage(message string) (*Frame, error) {
+func ParseMessage(message string, clientIp string) (*Frame, error) {
 	message = strings.TrimSpace(message)
 
 	var messageArr = strings.Split(message, ";")
@@ -106,13 +127,19 @@ func ParseMessage(message string) (*Frame, error) {
 		ChannelID: channelID,
 		Command:   messageArr[1],
 		Payload:   payload,
+		ClientIp:  clientIp,
 	}, nil
+}
+
+func (c *ClientHandler) SendMessageToClient(client *Client, message string) {
+
 }
 
 type Client struct {
 	Id            uuid.UUID
 	IPAddress     string
 	Channels      map[int]*Channel
+	Subscriptions map[int]*Subscription
 	Connection    net.Conn
 	Authenticated bool
 }
@@ -122,12 +149,14 @@ type FrameHandler interface {
 }
 
 type Channel struct {
-	Id            int
-	MessageQueues []string
+	Id     int
+	Inbox  []string
+	Outbox []string
 }
 
 type Frame struct {
 	ChannelID int
 	Command   string
 	Payload   string
+	ClientIp  string
 }

@@ -22,8 +22,14 @@ func startServer(configuration Configuration) {
 
 	fmt.Println("Server is listening on port: " + configuration.MARIUSMQ_SERVERPORT)
 
-	clientHandler := ClientHandler{Id: uuid.New(), AuthHandler: AuthHandler{ServerPassword: configuration.MARIUSMQ_PASSWORD}, Dispatcher: *NewDispatcher() /*, QueueHandler: QueueHandler{MessageQueues: map[string]MessageQueue{}}*/}
-	clientHandler.Dispatcher.Register(0, &clientHandler.AuthHandler)
+	authHandler := &AuthHandler{ServerPassword: configuration.MARIUSMQ_PASSWORD}
+	broker := &Broker{Queues: map[string]*Queue{}, EventBus: make(chan *Queue)}
+	clientHandler := &ClientHandler{Id: uuid.New(), Clients: map[string]*Client{}, AuthHandler: authHandler, Broker: broker}
+
+	authHandler.ClientHandler = clientHandler
+	broker.ClientHandler = clientHandler
+
+	go broker.StartListener()
 
 	for {
 		conn, err := listener.Accept()
@@ -34,16 +40,4 @@ func startServer(configuration Configuration) {
 		}
 		go clientHandler.handleClient(conn)
 	}
-}
-
-func handleCreateQueue() {
-
-}
-
-func handleSubscribeQueue() {
-
-}
-
-func handlePublishMessage() {
-
 }

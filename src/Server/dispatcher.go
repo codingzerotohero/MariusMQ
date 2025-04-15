@@ -1,5 +1,6 @@
 package main
 
+/*
 import (
 	"log"
 )
@@ -35,3 +36,4 @@ func (d *Dispatcher) Dispatch(frame Frame, client *Client) bool {
 	}
 	return result
 }
+*/
