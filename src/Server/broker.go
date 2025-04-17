@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -10,8 +11,8 @@ import (
 
 type Broker struct {
 	Queues        map[string]*Queue
-	ClientHandler *ClientHandler
-	EventBus      chan *Queue
+	BrokerChannel chan BrokerNotification
+	MessageChan   chan string
 	mu            sync.Mutex
 }
 
@@ -26,7 +27,7 @@ func (broker *Broker) Handle(frame Frame) {
 	}
 }
 
-func (broker *Broker) CreateQueue(frame Frame) bool {
+func (broker *Broker) CreateQueue(frame Frame) {
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
 
@@ -36,17 +37,9 @@ func (broker *Broker) CreateQueue(frame Frame) bool {
 	broker.Queues[name] = queue
 
 	log.Println("Queue created: " + name + " - Id: " + queue.Id.String())
-
-	broker.ClientHandler.Clients[frame.ClientIp].Channels[frame.ChannelID] = &Channel{
-		Id:     frame.ChannelID,
-		Inbox:  []string{},
-		Outbox: []string{},
-	}
-
-	return true
 }
 
-func (broker *Broker) Publish(frame Frame) bool {
+func (broker *Broker) Publish(frame Frame) {
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
 
@@ -67,21 +60,11 @@ func (broker *Broker) Publish(frame Frame) bool {
 		queue.Messages = append(queue.Messages, msg)
 		msg.Acknowledged = true
 
-		broker.ClientHandler.Clients[frame.ClientIp].Channels[frame.ChannelID] = &Channel{
-			Id:     frame.ChannelID,
-			Inbox:  []string{},
-			Outbox: []string{},
-		}
-
-		broker.EventBus <- queue
-	} else {
-		return false
+		broker.MessageChan <- queueName
 	}
-
-	return true
 }
 
-func (broker *Broker) Subscribe(frame Frame) bool {
+func (broker *Broker) Subscribe(frame Frame) {
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
 
@@ -94,40 +77,22 @@ func (broker *Broker) Subscribe(frame Frame) bool {
 			Type:      "CONSUMER",
 		}
 		queue.Subscriptions[frame.ClientIp] = subscription
-
-		broker.ClientHandler.Clients[frame.ClientIp].Channels[frame.ChannelID] = &Channel{
-			Id:     frame.ChannelID,
-			Inbox:  []string{},
-			Outbox: []string{},
-		}
 	}
-	return true
 }
 
-func (broker *Broker) StartListener() {
-	for queue := range broker.EventBus {
+func (broker *Broker) QueueListen() {
+	for queueName := range broker.MessageChan {
+		queue := broker.Queues[queueName]
 		if queue != nil && len(queue.Subscriptions) > 0 {
 			for clientIP, subscription := range queue.Subscriptions {
 				if subscription.Type != "CONSUMER" {
 					continue
 				}
 				log.Println("Subscriber client IP: " + clientIP)
-				client := broker.ClientHandler.Clients[clientIP]
-				channel := client.Channels[subscription.ChannelID]
-				if client == nil || channel == nil {
-					log.Println("Client or Channel null - skipping this subscriber")
-					if client == nil {
-						log.Println("Client is null!")
-					}
-					if channel == nil {
-						log.Println("Channel is nullers!!")
-					}
-					continue
-				}
 				messages := queue.Messages
 
 				for _, message := range messages {
-					broker.ClientHandler.SendMessageToConsumer(*client, *channel, message.Message)
+					go broker.SendMessageNotification(clientIP, message, strconv.Itoa(subscription.ChannelID))
 					message.Delivered = true
 				}
 			}
@@ -139,22 +104,17 @@ func (broker *Broker) StartListener() {
 	}
 }
 
-/*
-func (broker *Broker){
-
-		for queue := range broker.EventBus{
-			for clientIP, subscription := range queue.Subscriptions {
-				if subscription.Type == "CONSUMER" {
-					client := broker.ClientHandler.Clients[clientIP]
-					channel := client.Channels[3]
-					for _, message := range queue.Messages {
-						channel.Outbox = append(channel.Outbox, message.Message)
-					}
-				}
-			}
-		}
+func (broker *Broker) SendMessageNotification(clientIP string, message *Message, channelID string) {
+	broker.BrokerChannel <- BrokerNotification{
+		Notification: Notification{
+			Type: "SEND",
+		},
+		ClientIP:  clientIP,
+		ChannelID: channelID,
+		Message:   message.Message,
 	}
-*/
+}
+
 type Queue struct {
 	Id            uuid.UUID
 	Name          string
@@ -172,4 +132,11 @@ type Subscription struct {
 	ChannelID int
 	QueueName string
 	Type      string
+}
+
+type BrokerNotification struct {
+	Notification
+	ClientIP  string
+	ChannelID string
+	Message   string
 }

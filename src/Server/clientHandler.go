@@ -13,10 +13,12 @@ import (
 const messageDelimiter = '\n'
 
 type ClientHandler struct {
-	Id          uuid.UUID
-	Clients     map[string]*Client
-	AuthHandler *AuthHandler
-	Broker      *Broker
+	Id            uuid.UUID
+	Clients       map[string]*Client
+	AuthHandler   *AuthHandler
+	Broker        *Broker
+	AuthChannel   chan AuthNotification
+	BrokerChannel chan BrokerNotification
 }
 
 func (c *ClientHandler) handleClient(conn net.Conn) {
@@ -31,6 +33,8 @@ func (c *ClientHandler) handleClient(conn net.Conn) {
 		Connection: conn,
 	}
 
+	c.Clients[client.IPAddress] = client
+
 	for {
 		message, err := reader.ReadString(messageDelimiter)
 		if err != nil {
@@ -44,9 +48,18 @@ func (c *ClientHandler) handleClient(conn net.Conn) {
 			return
 		}
 
+		channel := client.Channels[frame.ChannelID]
+		if channel == nil {
+			client.Channels[frame.ChannelID] = &Channel{
+				Id:     frame.ChannelID,
+				Inbox:  []string{},
+				Outbox: []string{},
+			}
+		}
+
 		switch frame.ChannelID {
 		case 0:
-			go c.AuthHandler.Handle(*frame, client)
+			go c.AuthHandler.Handle(*frame)
 		default:
 			if !client.Authenticated {
 				log.Println("❌ Auth failed - client has not been authenticated.")
@@ -58,57 +71,61 @@ func (c *ClientHandler) handleClient(conn net.Conn) {
 				go c.Broker.Handle(*frame)
 			}
 		}
-
-		/*
-			if !c.Dispatcher.Dispatch(*frame, client) {
-				switch frame.ChannelID {
-				case 0:
-					if !client.Authenticated {
-						data := []byte("Authentication failed - bad password")
-						_, err = conn.Write(data)
-						if err != nil {
-							log.Println("Error sending data: ", err)
-						}
-						client.Connection.Close()
-						return
-					}
-				}
-			}*/
 	}
 }
 
-func (c *ClientHandler) SendMessageToConsumer(client Client, channel Channel, message string) {
-	data := []byte(strconv.Itoa(channel.Id) + ";" + message)
-	client.Connection.Write(data)
+func (c *ClientHandler) AuthChanListen() {
+	for notification := range c.AuthChannel {
+		switch notification.AuthMessage {
+		case ACCEPT:
+			c.OnClientAccepted(notification.ClientIP)
+		case DENY:
+			c.OnClientDenied(notification.ClientIP, notification.Reason)
+		}
+	}
+}
+
+func (c *ClientHandler) OnClientAccepted(clientIP string) {
+	client := c.Clients[clientIP]
+	client.Authenticated = true
+
+	data := []byte("CONNECTED" + string('\n'))
+	_, err := client.Connection.Write(data)
+	if err != nil {
+		log.Println("Error writing data to client:", err)
+	}
+}
+
+func (c *ClientHandler) OnClientDenied(clientIP string, reason DenyReason) {
+	client := c.Clients[clientIP]
+	client.Authenticated = false
+
+	data := []byte("DENIED - REASON: " + string(reason) + string('\n'))
+	_, err := client.Connection.Write(data)
+	if err != nil {
+		log.Println("Error writing data to client:", err)
+	}
+
+	client.Connection.Close()
+
+	delete(c.Clients, clientIP)
+}
+
+func (c *ClientHandler) ListenBrokerNotifications() {
+	for notification := range c.BrokerChannel {
+		client := c.Clients[notification.ClientIP]
+		if client == nil {
+			log.Println("Client could not be retrieved from Broker notification clientIP. Skipping.")
+			continue
+		}
+
+		data := []byte(notification.ChannelID + ";" + notification.Message)
+		client.Connection.Write(data)
+	}
 }
 
 func closeConnection(conn net.Conn) {
 	conn.Close()
-}
-
-func (c *ClientHandler) Route(message string, Client *Client) {
-
-	//cmd := Command(frame.Command)
-
-	/*
-		switch cmd {
-		case CONNECT:
-			log.Println("Routing to Auth")
-		case CREATE:
-			//log.Println("Handle create queue request")
-			//go c.QueueHandler.CreateQueue(value)
-			//data := []byte("CREATED")
-			//_, err = conn.Write(data)
-			//if err != nil {
-			//	log.Println("Error sending data: ", err)
-			//}
-		case PUBLISH:
-			log.Println("Handle publish request")
-		case SUBSCRIBE:
-			log.Println("Handle subscribe request")
-		default:
-			log.Println("Something else" + cmd)
-		}*/
 }
 
 func ParseMessage(message string, clientIp string) (*Frame, error) {
@@ -129,10 +146,6 @@ func ParseMessage(message string, clientIp string) (*Frame, error) {
 		Payload:   payload,
 		ClientIp:  clientIp,
 	}, nil
-}
-
-func (c *ClientHandler) SendMessageToClient(client *Client, message string) {
-
 }
 
 type Client struct {
