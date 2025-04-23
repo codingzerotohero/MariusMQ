@@ -51,9 +51,8 @@ func (c *ClientHandler) handleClient(conn net.Conn) {
 		channel := client.Channels[frame.ChannelID]
 		if channel == nil {
 			client.Channels[frame.ChannelID] = &Channel{
-				Id:     frame.ChannelID,
-				Inbox:  []string{},
-				Outbox: []string{},
+				Id:   frame.ChannelID,
+				Open: true,
 			}
 		}
 
@@ -63,8 +62,7 @@ func (c *ClientHandler) handleClient(conn net.Conn) {
 		default:
 			if !client.Authenticated {
 				log.Println("❌ Auth failed - client has not been authenticated.")
-				data := []byte("❌ Not authenticated! Rejected.")
-				_, err = client.Connection.Write(data)
+				client.WriteToClient("❌ Not authenticated! Rejected.")
 				client.Connection.Close()
 				return
 			} else {
@@ -89,29 +87,21 @@ func (c *ClientHandler) OnClientAccepted(clientIP string) {
 	client := c.Clients[clientIP]
 	client.Authenticated = true
 
-	data := []byte("CONNECTED" + string('\n'))
-	_, err := client.Connection.Write(data)
-	if err != nil {
-		log.Println("Error writing data to client:", err)
-	}
+	client.WriteToClient("CONNECTED")
 }
 
 func (c *ClientHandler) OnClientDenied(clientIP string, reason DenyReason) {
 	client := c.Clients[clientIP]
 	client.Authenticated = false
 
-	data := []byte("DENIED - REASON: " + string(reason) + string('\n'))
-	_, err := client.Connection.Write(data)
-	if err != nil {
-		log.Println("Error writing data to client:", err)
-	}
+	client.WriteToClient("DENIED - REASON: " + string(reason))
 
 	client.Connection.Close()
 
 	delete(c.Clients, clientIP)
 }
 
-func (c *ClientHandler) ListenBrokerNotifications() {
+func (c *ClientHandler) BrokerChanListen() {
 	for notification := range c.BrokerChannel {
 		client := c.Clients[notification.ClientIP]
 		if client == nil {
@@ -119,32 +109,69 @@ func (c *ClientHandler) ListenBrokerNotifications() {
 			continue
 		}
 
-		data := []byte(notification.ChannelID + ";" + notification.Message)
-		client.Connection.Write(data)
+		client.WriteToClient(notification.ChannelID + ";" + notification.ConsumerTag + ";" + notification.Message.Id.String() + ";" + notification.Message.Message)
 	}
 }
 
-func closeConnection(conn net.Conn) {
-	conn.Close()
+func (client *Client) WriteToClient(value string) {
+	data := []byte(value + string('\n'))
+	_, err := client.Connection.Write(data)
+	if err != nil {
+		log.Println("Error writing data to client:", err)
+	}
 }
 
-func ParseMessage(message string, clientIp string) (*Frame, error) {
-	message = strings.TrimSpace(message)
+func ParseMessage(data string, clientIp string) (*Frame, error) {
+	data = strings.TrimSpace(data)
 
-	var messageArr = strings.Split(message, ";")
+	dataArr := strings.Split(data, ";")
 
-	channelID, err := strconv.Atoi(messageArr[0])
+	channelID, err := strconv.Atoi(dataArr[0])
 	if err != nil {
 		return nil, err
 	}
 
-	payload := messageArr[2]
+	command := dataArr[1]
+
+	consumerTag := ""
+	queueName := ""
+	message := ""
+	password := ""
+	msgId := ""
+
+	switch len(dataArr) {
+	case 3:
+		if command == "CONNECT" {
+			password = dataArr[2]
+		} else {
+			queueName = dataArr[2]
+		}
+	case 4:
+		if command == "PUBLISH" {
+			queueName = dataArr[2]
+			message = dataArr[3]
+		}
+		if command == "SUBSCRIBE" {
+			consumerTag = dataArr[2]
+			queueName = dataArr[3]
+		}
+	case 5:
+		if command == "ACK" {
+			consumerTag = dataArr[2]
+			queueName = dataArr[3]
+			msgId = dataArr[4]
+		}
+	}
 
 	return &Frame{
-		ChannelID: channelID,
-		Command:   messageArr[1],
-		Payload:   payload,
-		ClientIp:  clientIp,
+		ChannelID:   channelID,
+		ClientIp:    clientIp,
+		Command:     command,
+		Password:    password,
+		Message:     message,
+		QueueName:   queueName,
+		ConsumerTag: consumerTag,
+		MessageId:   msgId,
 	}, nil
 }
 
@@ -162,14 +189,19 @@ type FrameHandler interface {
 }
 
 type Channel struct {
-	Id     int
-	Inbox  []string
-	Outbox []string
+	Id        int
+	Open      bool
+	Consumer  Consumer
+	Publisher Publisher
 }
 
 type Frame struct {
-	ChannelID int
-	Command   string
-	Payload   string
-	ClientIp  string
+	ChannelID   int
+	Command     string
+	Password    string
+	ClientIp    string
+	QueueName   string
+	ConsumerTag string
+	Message     string
+	MessageId   string
 }

@@ -29,7 +29,7 @@ func startServer(configuration Configuration) {
 	clientHandler := &ClientHandler{Id: uuid.New(), Clients: map[string]*Client{}, AuthHandler: authHandler, Broker: broker, AuthChannel: authHandler.AuthChannel, BrokerChannel: broker.BrokerChannel}
 
 	go clientHandler.AuthChanListen()
-	go clientHandler.ListenBrokerNotifications()
+	go clientHandler.BrokerChanListen()
 	go broker.QueueListen()
 
 	for {
