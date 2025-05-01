@@ -93,6 +93,8 @@ func (broker *Broker) Subscribe(frame Frame) {
 		}
 
 		queue.Subscriptions[frame.ClientIp] = subscription
+
+		go broker.DistributeAll(queue)
 	}
 }
 
@@ -104,16 +106,17 @@ func (broker *Broker) QueueListen() {
 		queue := broker.Queues[queueName]
 		if queue != nil && len(queue.Subscriptions) > 0 {
 			go broker.DistributeMessage(msgId, queue)
-			/* for i := range queue.Messages {
-				queue.Messages = append(queue.Messages[:i], queue.Messages[i+1:]...)
-			} */
 		}
 	}
 }
 
 func (broker *Broker) DistributeMessage(strMsgId string, queue *Queue) {
 	message := queue.Messages[strMsgId]
+	if message.Delivered == false {
+		return
+	}
 
+outer:
 	for clientIP, subscription := range queue.Subscriptions {
 		if subscription.Type != "CONSUMER" {
 			continue
@@ -125,16 +128,20 @@ func (broker *Broker) DistributeMessage(strMsgId string, queue *Queue) {
 				go broker.SendMessageNotification(clientIP, consumerTag, *message, strconv.Itoa(subscription.ChannelID))
 				consumer.Ready = false
 				message.Delivered = true
+				break outer
 			}
 		}
 	}
 }
 
+func (broker *Broker) DistributeAll(queue *Queue) {
+	for messageId := range queue.Messages {
+		go broker.DistributeMessage(messageId, queue)
+	}
+}
+
 func (broker *Broker) SendMessageNotification(clientIP string, consumerTag string, message Message, channelID string) {
 	broker.BrokerChannel <- BrokerNotification{
-		Notification: Notification{
-			Type: "SEND",
-		},
 		ClientIP:    clientIP,
 		ChannelID:   channelID,
 		Message:     message,
@@ -150,6 +157,8 @@ func (broker *Broker) ConsumerAcknowledgeMessage(frame Frame) {
 
 	message.Acknowledged = true
 	consumer.Ready = true
+
+	delete(queue.Messages, frame.MessageId)
 
 }
 
@@ -188,7 +197,6 @@ type Subscription struct {
 }
 
 type BrokerNotification struct {
-	Notification
 	ClientIP    string
 	ChannelID   string
 	Message     Message
