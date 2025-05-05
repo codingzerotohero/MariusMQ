@@ -24,12 +24,14 @@ func startServer(configuration Configuration) {
 
 	authHandler := &AuthHandler{ServerPassword: configuration.MARIUSMQ_PASSWORD, AuthChannel: make(chan AuthNotification)}
 
-	broker := &Broker{Queues: map[string]*Queue{}, BrokerChannel: make(chan BrokerNotification), MessageChan: make(chan string)}
+	broker := &Broker{Queues: map[string]*Queue{}, BrokerMessageChan: make(chan BrokerMessageNotification), BrokerQueueActionChan: make(chan BrokerQueueActionNotification), InternalMessageChan: make(chan string)}
 
-	clientHandler := &ClientHandler{Id: uuid.New(), Clients: map[string]*Client{}, AuthHandler: authHandler, Broker: broker, AuthChannel: authHandler.AuthChannel, BrokerChannel: broker.BrokerChannel}
+	clientHandler := &ClientHandler{Id: uuid.New(), Clients: map[string]*Client{}, AuthHandler: authHandler, Broker: broker, AuthChannel: authHandler.AuthChannel, BrokerMessageChannel: broker.BrokerMessageChan, BrokerQueueActionChannel: broker.BrokerQueueActionChan}
 
 	go clientHandler.AuthChanListen()
-	go clientHandler.BrokerChanListen()
+	go clientHandler.BrokerMessageChanListen()
+	go clientHandler.BrokerQueueActionMessageChanListen()
+
 	go broker.QueueListen()
 
 	for {

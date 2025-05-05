@@ -10,10 +10,11 @@ import (
 )
 
 type Broker struct {
-	Queues        map[string]*Queue
-	BrokerChannel chan BrokerNotification
-	MessageChan   chan string
-	mu            sync.Mutex
+	Queues                map[string]*Queue
+	BrokerMessageChan     chan BrokerMessageNotification
+	BrokerQueueActionChan chan BrokerQueueActionNotification
+	InternalMessageChan   chan string
+	mu                    sync.RWMutex
 }
 
 func (broker *Broker) Handle(frame Frame) {
@@ -32,21 +33,28 @@ func (broker *Broker) Handle(frame Frame) {
 }
 
 func (broker *Broker) CreateQueue(frame Frame) {
-	broker.mu.Lock()
-	defer broker.mu.Unlock()
-
 	name := frame.QueueName
 
-	queue := &Queue{Id: uuid.New(), Name: name, Subscriptions: map[string]*Subscription{}, Messages: map[string]*Message{}}
+	broker.mu.RLock()
+	queue := broker.Queues[name]
+	broker.mu.RUnlock()
+
+	if queue != nil {
+		go broker.SendQueueActionNotification(CREATE_QUEUE_FAIL_ALREADY_EXISTS, frame.ClientIp, strconv.Itoa(frame.ChannelID), name)
+		return
+	}
+
+	queue = &Queue{Id: uuid.New(), Name: name, Subscriptions: map[string]*Subscription{}, Messages: map[string]*Message{}}
+
+	broker.mu.Lock()
 	broker.Queues[name] = queue
+	broker.mu.Unlock()
 
 	log.Println("Queue created: " + name + " - Id: " + queue.Id.String())
+
 }
 
 func (broker *Broker) Publish(frame Frame) {
-	broker.mu.Lock()
-	defer broker.mu.Unlock()
-
 	queueName := frame.QueueName
 	message := frame.Message
 
@@ -57,53 +65,85 @@ func (broker *Broker) Publish(frame Frame) {
 		Delivered:    false,
 	}
 
+	broker.mu.RLock()
 	queue := broker.Queues[queueName]
+	broker.mu.RUnlock()
 
 	if queue != nil {
+		queue.mu.Lock()
 		queue.Messages[msg.Id.String()] = msg
+		queue.mu.Unlock()
 
-		broker.MessageChan <- queueName + ";" + msg.Id.String()
+		broker.InternalMessageChan <- queueName + ";" + msg.Id.String()
 	}
 }
 
 func (broker *Broker) DeleteQueue(frame Frame) {
 	broker.mu.Lock()
-	defer broker.mu.Unlock()
+	queue := broker.Queues[frame.QueueName]
+	if queue == nil {
+		broker.mu.Unlock()
+		go broker.SendQueueActionNotification(DELETE_QUEUE_FAIL_DOES_NOT_EXIST, frame.ClientIp, strconv.Itoa(frame.ChannelID), frame.QueueName)
+		return
+	}
 
 	delete(broker.Queues, frame.QueueName)
+	broker.mu.Unlock()
+
+	queue.mu.Lock()
+
+	queue.Messages = nil
+
+	for clientIP, subscription := range queue.Subscriptions {
+		go broker.SendQueueActionNotification(QUEUE_DELETED, clientIP, strconv.Itoa(subscription.ChannelID), frame.QueueName)
+		subscription.Consumers = nil
+		subscription.Publishers = nil
+	}
+
+	queue.Subscriptions = nil
+	queue.mu.Unlock()
 }
 
 func (broker *Broker) Subscribe(frame Frame) {
-	broker.mu.Lock()
-	defer broker.mu.Unlock()
-
+	broker.mu.RLock()
 	queue := broker.Queues[frame.QueueName]
-	if queue != nil {
-		subscription := &Subscription{
-			ChannelID: frame.ChannelID,
-			QueueName: frame.QueueName,
-			Type:      "CONSUMER",
-			Consumers: map[string]*Consumer{},
-		}
+	broker.mu.RUnlock()
 
-		subscription.Consumers[frame.ConsumerTag] = &Consumer{
-			Id:    uuid.New(),
-			Name:  frame.ConsumerTag,
-			Ready: true,
-		}
-
-		queue.Subscriptions[frame.ClientIp] = subscription
-
-		go broker.DistributeAll(queue)
+	if queue == nil {
+		go broker.SendQueueActionNotification(SUBSCRIBE_QUEUE_FAIL_DOES_NOT_EXIST, frame.ClientIp, strconv.Itoa(frame.ChannelID), frame.QueueName)
+		return
 	}
+
+	subscription := &Subscription{
+		ChannelID: frame.ChannelID,
+		QueueName: frame.QueueName,
+		Type:      "CONSUMER",
+		Consumers: map[string]*Consumer{},
+	}
+
+	subscription.Consumers[frame.ConsumerTag] = &Consumer{
+		Id:    uuid.New(),
+		Name:  frame.ConsumerTag,
+		Ready: true,
+	}
+
+	queue.mu.Lock()
+	queue.Subscriptions[frame.ClientIp] = subscription
+	queue.mu.Unlock()
+
+	go broker.DistributeAll(queue)
+
 }
 
 func (broker *Broker) QueueListen() {
-	for queueNameAndMessageId := range broker.MessageChan {
+	for queueNameAndMessageId := range broker.InternalMessageChan {
 		queueName := strings.Split(queueNameAndMessageId, ";")[0]
 		msgId := strings.Split(queueNameAndMessageId, ";")[1]
 
+		broker.mu.RLock()
 		queue := broker.Queues[queueName]
+		broker.mu.RUnlock()
+
 		if queue != nil && len(queue.Subscriptions) > 0 {
 			go broker.DistributeMessage(msgId, queue)
 		}
@@ -111,6 +151,9 @@ func (broker *Broker) QueueListen() {
 }
 
 func (broker *Broker) DistributeMessage(strMsgId string, queue *Queue) {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+
 	message := queue.Messages[strMsgId]
 	if message.Delivered == false {
 		return
@@ -125,7 +168,7 @@ outer:
 
 		for consumerTag, consumer := range subscription.Consumers {
 			if consumer.Ready {
-				go broker.SendMessageNotification(clientIP, consumerTag, *message, strconv.Itoa(subscription.ChannelID))
+				go broker.SendMessageNotification(SEND_MESSAGE, clientIP, consumerTag, *message, strconv.Itoa(subscription.ChannelID))
 				consumer.Ready = false
 				message.Delivered = true
 				break outer
@@ -135,17 +178,36 @@ outer:
 }
 
 func (broker *Broker) DistributeAll(queue *Queue) {
+	// Step 1: Safely collect message IDs under lock
+	queue.mu.Lock()
+	messageIDs := make([]string, 0, len(queue.Messages))
 	for messageId := range queue.Messages {
+		messageIDs = append(messageIDs, messageId)
+	}
+	queue.mu.Unlock()
+
+	// Step 2: Distribute outside of lock
+	for _, messageId := range messageIDs {
 		go broker.DistributeMessage(messageId, queue)
 	}
 }
 
-func (broker *Broker) SendMessageNotification(clientIP string, consumerTag string, message Message, channelID string) {
-	broker.BrokerChannel <- BrokerNotification{
-		ClientIP:    clientIP,
-		ChannelID:   channelID,
-		Message:     message,
-		ConsumerTag: consumerTag,
+func (broker *Broker) SendMessageNotification(notificationType NotificationType, clientIP string, consumerTag string, message Message, channelID string) {
+	broker.BrokerMessageChan <- BrokerMessageNotification{
+		NotificationType: notificationType,
+		ClientIP:         clientIP,
+		ChannelID:        channelID,
+		Message:          message,
+		ConsumerTag:      consumerTag,
+	}
+}
+
+func (broker *Broker) SendQueueActionNotification(notificationType NotificationType, clientIP string, channelID string, queueName string) {
+	broker.BrokerQueueActionChan <- BrokerQueueActionNotification{
+		NotificationType: notificationType,
+		ClientIP:         clientIP,
+		ChannelID:        channelID,
+		QueueName:        queueName,
 	}
 }
 
@@ -167,6 +229,7 @@ type Queue struct {
 	Name          string
 	Subscriptions map[string]*Subscription
 	Messages      map[string]*Message
+	mu            sync.Mutex
 }
 
 type Consumer struct {
@@ -196,9 +259,17 @@ type Subscription struct {
 	Type       string
 }
 
-type BrokerNotification struct {
-	ClientIP    string
-	ChannelID   string
-	Message     Message
-	ConsumerTag string
+type BrokerMessageNotification struct {
+	NotificationType NotificationType
+	ClientIP         string
+	ChannelID        string
+	Message          Message
+	ConsumerTag      string
+}
+
+type BrokerQueueActionNotification struct {
+	NotificationType NotificationType
+	ClientIP         string
+	ChannelID        string
+	QueueName        string
 }

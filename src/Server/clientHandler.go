@@ -13,12 +13,13 @@ import (
 const messageDelimiter = '\n'
 
 type ClientHandler struct {
-	Id            uuid.UUID
-	Clients       map[string]*Client
-	AuthHandler   *AuthHandler
-	Broker        *Broker
-	AuthChannel   chan AuthNotification
-	BrokerChannel chan BrokerNotification
+	Id                       uuid.UUID
+	Clients                  map[string]*Client
+	AuthHandler              *AuthHandler
+	Broker                   *Broker
+	AuthChannel              chan AuthNotification
+	BrokerMessageChannel     chan BrokerMessageNotification
+	BrokerQueueActionChannel chan BrokerQueueActionNotification
 }
 
 func (c *ClientHandler) handleClient(conn net.Conn) {
@@ -101,15 +102,27 @@ func (c *ClientHandler) OnClientDenied(clientIP string, reason DenyReason) {
 	delete(c.Clients, clientIP)
 }
 
-func (c *ClientHandler) BrokerChanListen() {
-	for notification := range c.BrokerChannel {
+func (c *ClientHandler) BrokerMessageChanListen() {
+	for notification := range c.BrokerMessageChannel {
 		client := c.Clients[notification.ClientIP]
 		if client == nil {
 			log.Println("Client could not be retrieved from Broker notification clientIP. Skipping.")
 			continue
 		}
 
-		client.WriteToClient(notification.ChannelID + ";" + notification.ConsumerTag + ";" + notification.Message.Id.String() + ";" + notification.Message.Message)
+		go client.WriteToClient(notification.ChannelID + ";" + notification.ConsumerTag + ";" + notification.Message.Id.String() + ";" + notification.Message.Message)
+	}
+}
+func (c *ClientHandler) BrokerQueueActionMessageChanListen() {
+	for notification := range c.BrokerQueueActionChannel {
+		client := c.Clients[notification.ClientIP]
+		if client == nil {
+			log.Println("Client could not be retrieved from Broker notification clientIP. Skipping.")
+			continue
+		}
+
+		client.WriteToClient(notification.ChannelID + ";" + string(notification.NotificationType) + ";" + notification.QueueName)
+
 	}
 }
 
