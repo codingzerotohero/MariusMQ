@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	orderedmap "github.com/wk8/go-ordered-map"
 )
 
 type Broker struct {
@@ -44,7 +45,11 @@ func (broker *Broker) CreateQueue(frame Frame) {
 		return
 	}
 
-	queue = &Queue{Id: uuid.New(), Name: name, Subscriptions: map[string]*Subscription{}, Messages: map[string]*Message{}}
+	queue = &Queue{Id: uuid.New(),
+		Name:          name,
+		Subscriptions: map[string]*Subscription{},
+		Messages:      orderedmap.New(),
+	}
 
 	broker.mu.Lock()
 	broker.Queues[name] = queue
@@ -69,13 +74,20 @@ func (broker *Broker) Publish(frame Frame) {
 	queue := broker.Queues[queueName]
 	broker.mu.RUnlock()
 
-	if queue != nil {
-		queue.mu.Lock()
-		queue.Messages[msg.Id.String()] = msg
-		queue.mu.Unlock()
-
-		broker.InternalMessageChan <- queueName + ";" + msg.Id.String()
+	if queue == nil {
+		go broker.SendQueueActionNotification(PUBLISH_MESSAGE_FAIL_QUEUE_DOES_NOT_EXIST, frame.ClientIp, strconv.Itoa(frame.ChannelID), frame.QueueName)
+		return
 	}
+
+	queue.mu.Lock()
+
+	//OrderedMap implementation
+	queue.Messages.Set(msg.Id.String(), msg)
+	//queue.Messages[msg.Id.String()] = msg
+	queue.mu.Unlock()
+
+	broker.InternalMessageChan <- queueName + ";" + msg.Id.String()
+
 }
 
 func (broker *Broker) DeleteQueue(frame Frame) {
@@ -92,6 +104,7 @@ func (broker *Broker) DeleteQueue(frame Frame) {
 
 	queue.mu.Lock()
 
+	//queue.Messages = nil
 	queue.Messages = nil
 
 	for clientIP, subscription := range queue.Subscriptions {
@@ -154,8 +167,21 @@ func (broker *Broker) DistributeMessage(strMsgId string, queue *Queue) {
 	queue.mu.Lock()
 	defer queue.mu.Unlock()
 
-	message := queue.Messages[strMsgId]
-	if message.Delivered == false {
+	log.Println("Sending message: " + strMsgId)
+
+	value, exists := queue.Messages.Get(strMsgId)
+	if !exists {
+		log.Println("Could not find message with id: " + strMsgId + " in Queue: " + queue.Name)
+		return
+	}
+
+	message, ok := value.(*Message)
+	if !ok {
+		log.Println("Type assertion failed")
+		return
+	}
+
+	if message.Delivered == true {
 		return
 	}
 
@@ -164,7 +190,6 @@ outer:
 		if subscription.Type != "CONSUMER" {
 			continue
 		}
-		log.Println("Subscriber client IP: " + clientIP)
 
 		for consumerTag, consumer := range subscription.Consumers {
 			if consumer.Ready {
@@ -178,17 +203,26 @@ outer:
 }
 
 func (broker *Broker) DistributeAll(queue *Queue) {
-	// Step 1: Safely collect message IDs under lock
 	queue.mu.Lock()
-	messageIDs := make([]string, 0, len(queue.Messages))
-	for messageId := range queue.Messages {
+	messageIDs := make([]string, 0, queue.Messages.Len())
+
+	for pair := queue.Messages.Oldest(); pair != nil; pair = pair.Next() {
+		message, _ := pair.Value.(*Message)
+		if message.Delivered == true {
+			continue
+		}
+
+		messageId, _ := pair.Key.(string)
+
+		log.Println("Appending message: " + messageId)
 		messageIDs = append(messageIDs, messageId)
 	}
+
 	queue.mu.Unlock()
 
-	// Step 2: Distribute outside of lock
 	for _, messageId := range messageIDs {
-		go broker.DistributeMessage(messageId, queue)
+		log.Println("Distributing message: " + messageId)
+		broker.DistributeMessage(messageId, queue)
 	}
 }
 
@@ -213,22 +247,42 @@ func (broker *Broker) SendQueueActionNotification(notificationType NotificationT
 
 func (broker *Broker) ConsumerAcknowledgeMessage(frame Frame) {
 	queue := broker.Queues[frame.QueueName]
+
+	queue.mu.Lock()
+
 	subscription := queue.Subscriptions[frame.ClientIp]
 	consumer := subscription.Consumers[frame.ConsumerTag]
-	message := queue.Messages[frame.MessageId]
+	//OrderedMap implementation
+	value, exists := queue.Messages.Get(frame.MessageId)
+	if !exists {
+		log.Println("Could not find message with id: " + frame.MessageId + " in Queue: " + queue.Name)
+		return
+	}
+
+	message, ok := value.(*Message)
+	if !ok {
+		log.Println("Type assertion failed")
+		return
+	}
+	//message := queue.Messages[frame.MessageId]
 
 	message.Acknowledged = true
 	consumer.Ready = true
 
-	delete(queue.Messages, frame.MessageId)
+	//OrderedMap implementation
+	queue.Messages.Delete(frame.MessageId)
 
+	//delete(queue.Messages, frame.MessageId)
+	queue.mu.Unlock()
+
+	broker.DistributeAll(queue)
 }
 
 type Queue struct {
 	Id            uuid.UUID
 	Name          string
 	Subscriptions map[string]*Subscription
-	Messages      map[string]*Message
+	Messages      *orderedmap.OrderedMap
 	mu            sync.Mutex
 }
 

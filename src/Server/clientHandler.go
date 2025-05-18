@@ -22,7 +22,7 @@ type ClientHandler struct {
 	BrokerQueueActionChannel chan BrokerQueueActionNotification
 }
 
-func (c *ClientHandler) handleClient(conn net.Conn) {
+func (c *ClientHandler) HandleClient(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 
 	log.Println("Client connected: ", conn.RemoteAddr().String())

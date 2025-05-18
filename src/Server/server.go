@@ -41,6 +41,6 @@ func startServer(configuration Configuration) {
 			log.Println("Error: ", err)
 			continue
 		}
-		go clientHandler.handleClient(conn)
+		go clientHandler.HandleClient(conn)
 	}
 }
